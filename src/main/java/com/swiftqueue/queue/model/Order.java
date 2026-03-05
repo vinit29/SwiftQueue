@@ -32,6 +32,8 @@ public class Order {
 
     private String status = "waiting";
 
+    private Integer duration;
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 }

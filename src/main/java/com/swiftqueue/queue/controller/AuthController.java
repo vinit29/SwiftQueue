@@ -1,5 +1,7 @@
 package com.swiftqueue.queue.controller;
 
+import java.util.Map;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -13,7 +15,7 @@ import com.swiftqueue.queue.dto.LoginRequest;
 import com.swiftqueue.queue.dto.SignUpRequest;
 import com.swiftqueue.queue.model.Owner;
 import com.swiftqueue.queue.repository.OwnerRepository;
-// Other necessary imports for JWT and AuthenticationManager
+import com.swiftqueue.queue.security.JwtTokenProvider;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -21,17 +23,18 @@ public class AuthController {
 
     private final OwnerRepository ownerRepository;
     private final PasswordEncoder passwordEncoder;
-    // You will also inject AuthenticationManager and a JwtTokenProvider
+    private final JwtTokenProvider tokenProvider;
 
-    public AuthController(OwnerRepository ownerRepository, PasswordEncoder passwordEncoder) {
+    public AuthController(OwnerRepository ownerRepository, PasswordEncoder passwordEncoder, JwtTokenProvider tokenProvider) {
         this.ownerRepository = ownerRepository;
         this.passwordEncoder = passwordEncoder;
+        this.tokenProvider = tokenProvider;
     }
 
     @PostMapping("/signup")
     public ResponseEntity<?> registerOwner(@RequestBody SignUpRequest signUpRequest) {
         if (ownerRepository.existsByEmail(signUpRequest.email())) {
-            return new ResponseEntity<>("Email is already taken!", HttpStatus.BAD_REQUEST);
+            return ResponseEntity.badRequest().body(Map.of("error", "Email is already taken!"));
         }
 
         Owner owner = new Owner();
@@ -40,12 +43,14 @@ public class AuthController {
         owner.setBusinessName(signUpRequest.businessName());
         owner.setBusinessType(signUpRequest.businessType());
 
-        ownerRepository.save(owner);
+        Owner savedOwner = ownerRepository.save(owner);
         
         // TODO: Initialize counter for this owner
-        // TODO: Generate JWT and return AuthResponse
+        
+        String token = tokenProvider.generateToken(savedOwner.getId());
 
-        return new ResponseEntity<>("Owner registered successfully!", HttpStatus.OK);
+        AuthResponse response = new AuthResponse(token, savedOwner.getId(), savedOwner.getBusinessName(), savedOwner.getBusinessType());
+        return ResponseEntity.ok(response);
     }
     
     @PostMapping("/login")
@@ -60,8 +65,7 @@ public class AuthController {
              return new ResponseEntity<>(HttpStatus.UNAUTHORIZED);
         }
         
-        // String token = jwtTokenProvider.generateToken(owner.getId());
-        String token = "dummy-token-for-now"; // Replace with real token generation
+        String token = tokenProvider.generateToken(owner.getId());
         
         AuthResponse response = new AuthResponse(token, owner.getId(), owner.getBusinessName(), owner.getBusinessType());
         return ResponseEntity.ok(response);
