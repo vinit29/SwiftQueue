@@ -5,6 +5,7 @@ import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -13,7 +14,9 @@ import org.springframework.web.bind.annotation.RestController;
 import com.swiftqueue.queue.dto.AuthResponse;
 import com.swiftqueue.queue.dto.LoginRequest;
 import com.swiftqueue.queue.dto.SignUpRequest;
+import com.swiftqueue.queue.model.Counter;
 import com.swiftqueue.queue.model.Owner;
+import com.swiftqueue.queue.repository.CounterRepository;
 import com.swiftqueue.queue.repository.OwnerRepository;
 import com.swiftqueue.queue.security.JwtTokenProvider;
 
@@ -22,16 +25,19 @@ import com.swiftqueue.queue.security.JwtTokenProvider;
 public class AuthController {
 
     private final OwnerRepository ownerRepository;
+    private final CounterRepository counterRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider tokenProvider;
 
-    public AuthController(OwnerRepository ownerRepository, PasswordEncoder passwordEncoder, JwtTokenProvider tokenProvider) {
+    public AuthController(OwnerRepository ownerRepository, CounterRepository counterRepository, PasswordEncoder passwordEncoder, JwtTokenProvider tokenProvider) {
         this.ownerRepository = ownerRepository;
+        this.counterRepository = counterRepository;
         this.passwordEncoder = passwordEncoder;
         this.tokenProvider = tokenProvider;
     }
 
     @PostMapping("/signup")
+    @Transactional
     public ResponseEntity<?> registerOwner(@RequestBody SignUpRequest signUpRequest) {
         if (ownerRepository.existsByEmail(signUpRequest.email())) {
             return ResponseEntity.badRequest().body(Map.of("error", "Email is already taken!"));
@@ -45,7 +51,8 @@ public class AuthController {
 
         Owner savedOwner = ownerRepository.save(owner);
         
-        // TODO: Initialize counter for this owner
+        // Initialize counter for this owner with default sequence 100 and average time 30 mins
+        counterRepository.save(new Counter(savedOwner.getId(), 100, 30));
         
         String token = tokenProvider.generateToken(savedOwner.getId());
 
@@ -55,11 +62,6 @@ public class AuthController {
     
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> authenticateOwner(@RequestBody LoginRequest loginRequest) {
-        // Here you would use AuthenticationManager to validate credentials
-        // Then, use a JwtTokenProvider to generate a token
-        // Finally, find the owner details and return an AuthResponse
-        
-        // Simplified logic:
         Owner owner = ownerRepository.findByEmail(loginRequest.email()).orElse(null);
         if (owner == null || !passwordEncoder.matches(loginRequest.password(), owner.getPassword())) {
              return new ResponseEntity<>(HttpStatus.UNAUTHORIZED);
