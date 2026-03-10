@@ -2,68 +2,80 @@ package com.swiftqueue.queue.security;
 
 import java.nio.charset.StandardCharsets;
 import java.security.Key;
+import java.util.ArrayList;
 import java.util.Date;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Component;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
+import jakarta.servlet.http.HttpServletRequest;
 
 @Component
 public class JwtTokenProvider {
 
-    @Value("${jwt.secret}")
-    private String jwtSecret;
+    @Value("${security.jwt.token.secret-key:DefaultSecretKeyForSwiftQueueApplicationThatIsLongEnoughForHS256}")
+    private String secretKeyString;
 
-    @Value("${jwt.expiration-ms}")
-    private int jwtExpirationMs;
+    @Value("${security.jwt.token.expire-length:86400000}") // 24h
+    private long validityInMilliseconds;
+    private Key signingKey;
 
-    private Key getSigningKey() {
-        byte[] keyBytes = jwtSecret.getBytes(StandardCharsets.UTF_8);
-        // Ensure key is long enough for HS512 (64 bytes)
-        if (keyBytes.length < 64) {
-            byte[] longKey = new byte[64];
-            System.arraycopy(keyBytes, 0, longKey, 0, keyBytes.length);
-            // Fill the rest with the key repeated to ensure valid length
-            for (int i = keyBytes.length; i < 64; i++) {
-                longKey[i] = keyBytes[i % keyBytes.length];
-            }
-            keyBytes = longKey;
-        }
-        return Keys.hmacShaKeyFor(keyBytes);
+    @PostConstruct
+    protected void init() {
+        byte[] keyBytes = this.secretKeyString.getBytes(StandardCharsets.UTF_8);
+        this.signingKey = Keys.hmacShaKeyFor(keyBytes);
     }
 
     public String generateToken(Long ownerId) {
+        Claims claims = Jwts.claims().setSubject(String.valueOf(ownerId));
         Date now = new Date();
-        Date expiryDate = new Date(now.getTime() + jwtExpirationMs);
+        Date validity = new Date(now.getTime() + validityInMilliseconds);
 
         return Jwts.builder()
-                .setSubject(Long.toString(ownerId))
+                .setClaims(claims)
                 .setIssuedAt(now)
-                .setExpiration(expiryDate)
-                .signWith(getSigningKey(), SignatureAlgorithm.HS512)
+                .setExpiration(validity)
+                .signWith(signingKey)
                 .compact();
     }
 
-    public boolean validateToken(String authToken) {
-        try {
-            Jwts.parserBuilder().setSigningKey(getSigningKey()).build().parseClaimsJws(authToken);
-            return true;
-        } catch (JwtException | IllegalArgumentException e) {
-            return false;
+    public Authentication getAuthentication(String token) {
+        String ownerId = Jwts.parserBuilder()
+            .setSigningKey(signingKey)
+            .build()
+            .parseClaimsJws(token)
+            .getBody()
+            .getSubject();
+        return new UsernamePasswordAuthenticationToken(ownerId, "", new ArrayList<>());
+    }
+
+    public String resolveToken(HttpServletRequest req) {
+        String bearerToken = req.getHeader("Authorization");
+        if (bearerToken != null && bearerToken.startsWith("Bearer ")) {
+            return bearerToken.substring(7);
         }
+        return null;
+    }
+
+    public boolean validateToken(String token) throws JwtException {
+        Jwts.parserBuilder().setSigningKey(signingKey).build().parseClaimsJws(token);
+        return true;
     }
 
     public Long getOwnerIdFromToken(String token) {
         Claims claims = Jwts.parserBuilder()
-                .setSigningKey(getSigningKey())
+                .setSigningKey(signingKey)
                 .build()
                 .parseClaimsJws(token)
                 .getBody();
+
         return Long.parseLong(claims.getSubject());
     }
 }

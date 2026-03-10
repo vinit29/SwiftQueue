@@ -61,10 +61,10 @@ public class AuthController {
     }
     
     @PostMapping("/login")
-    public ResponseEntity<AuthResponse> authenticateOwner(@RequestBody LoginRequest loginRequest) {
+    public ResponseEntity<?> authenticateOwner(@RequestBody LoginRequest loginRequest) {
         Owner owner = ownerRepository.findByEmail(loginRequest.email()).orElse(null);
         if (owner == null || !passwordEncoder.matches(loginRequest.password(), owner.getPassword())) {
-             return new ResponseEntity<>(HttpStatus.UNAUTHORIZED);
+             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Invalid email or password"));
         }
         
         String token = tokenProvider.generateToken(owner.getId());

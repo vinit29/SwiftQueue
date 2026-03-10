@@ -2,12 +2,14 @@ package com.swiftqueue.queue.controller;
 
 import java.security.Principal;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.swiftqueue.queue.model.Counter;
 import com.swiftqueue.queue.model.Order;
@@ -24,23 +27,18 @@ import com.swiftqueue.queue.repository.CounterRepository;
 import com.swiftqueue.queue.repository.OrderRepository;
 import com.swiftqueue.queue.repository.OwnerRepository;
 
-import tools.jackson.databind.ObjectMapper;
-
 @RestController
-@CrossOrigin(origins = "*")
 @RequestMapping("/api")
 public class OrderController {
 
     private final OrderRepository orderRepository;
     private final CounterRepository counterRepository;
     private final OwnerRepository ownerRepository;
-    private final ObjectMapper objectMapper;
 
-    public OrderController(OrderRepository orderRepository, CounterRepository counterRepository, OwnerRepository ownerRepository, ObjectMapper objectMapper) {
+    public OrderController(OrderRepository orderRepository, CounterRepository counterRepository, OwnerRepository ownerRepository) {
         this.orderRepository = orderRepository;
         this.counterRepository = counterRepository;
         this.ownerRepository = ownerRepository;
-        this.objectMapper = objectMapper;
     }
 
     @GetMapping("/orders")
@@ -48,23 +46,34 @@ public class OrderController {
         Long ownerId = Long.valueOf(principal.getName());
         List<Order> orders = orderRepository.findByOwnerIdAndStatusNotOrderByIsPriorityDescTokenAsc(ownerId, "completed");
         
-        List<Map<String, Object>> response = new ArrayList<>();
+        // Filter out cancelled orders
+        orders.removeIf(o -> "cancelled".equals(o.getStatus()));
+        
+        // The default repository sort is by priority then token.
+        // We need to ensure 'serving' status is always first, then priority items.
+        // So we re-sort the list here to establish the correct order.
+        orders.sort(Comparator
+            .comparing((Order o) -> "serving".equals(o.getStatus()) ? 0 : 1) // 'serving' comes first
+            .thenComparing(Order::isPriority, Comparator.reverseOrder())      // then priority items
+            .thenComparing(Order::getToken));                                 // then by token number
+        
+        List<Map<String, Object>> response = new ArrayList<>(orders.size());
         int cumulativeWaitTime = 0;
 
         for (Order order : orders) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> orderMap = objectMapper.convertValue(order, Map.class);
+            int estimatedWaitTime = "serving".equals(order.getStatus()) ? 0 : cumulativeWaitTime;
             
-            if ("serving".equals(order.getStatus())) {
-                // If serving, the wait time for THIS customer is 0 (or serving)
-                // But they contribute their duration to the NEXT customer's wait
-                orderMap.put("estimatedWaitTime", 0);
-                cumulativeWaitTime += order.getDuration();
-            } else {
-                // If waiting, their wait time is the sum of durations of everyone ahead
-                orderMap.put("estimatedWaitTime", cumulativeWaitTime);
-                cumulativeWaitTime += order.getDuration();
-            }
+            cumulativeWaitTime += order.getDuration();
+            
+            Map<String, Object> orderMap = new HashMap<>();
+            orderMap.put("id", order.getId());
+            orderMap.put("token", order.getToken());
+            orderMap.put("customerName", order.getCustomerName());
+            orderMap.put("customerMobile", order.getCustomerMobile());
+            orderMap.put("isPriority", order.isPriority());
+            orderMap.put("status", order.getStatus());
+            orderMap.put("duration", order.getDuration());
+            orderMap.put("estimatedWaitTime", estimatedWaitTime);
             
             response.add(orderMap);
         }
@@ -76,7 +85,8 @@ public class OrderController {
     @Transactional
     public ResponseEntity<?> serveOrder(@PathVariable Integer token, Principal principal) {
         Long ownerId = Long.valueOf(principal.getName());
-        Order order = orderRepository.findByTokenAndOwnerId(token, ownerId).orElse(null);
+        List<Order> orders = orderRepository.findByOwnerIdAndStatusNotOrderByIsPriorityDescTokenAsc(ownerId, "completed");
+        Order order = orders.stream().filter(o -> o.getToken().equals(token)).findFirst().orElse(null);
 
         if (order == null) {
             return ResponseEntity.notFound().build();
@@ -92,7 +102,8 @@ public class OrderController {
     @Transactional
     public ResponseEntity<?> completeOrder(@PathVariable Integer token, Principal principal) {
         Long ownerId = Long.valueOf(principal.getName());
-        Order order = orderRepository.findByTokenAndOwnerId(token, ownerId).orElse(null);
+        List<Order> orders = orderRepository.findByOwnerIdAndStatusNotOrderByIsPriorityDescTokenAsc(ownerId, "completed");
+        Order order = orders.stream().filter(o -> o.getToken().equals(token)).findFirst().orElse(null);
 
         if (order == null) {
             return ResponseEntity.notFound().build();
@@ -108,7 +119,8 @@ public class OrderController {
     @Transactional
     public ResponseEntity<?> togglePriority(@PathVariable Integer token, Principal principal) {
         Long ownerId = Long.valueOf(principal.getName());
-        Order order = orderRepository.findByTokenAndOwnerId(token, ownerId).orElse(null);
+        List<Order> orders = orderRepository.findByOwnerIdAndStatusNotOrderByIsPriorityDescTokenAsc(ownerId, "completed");
+        Order order = orders.stream().filter(o -> o.getToken().equals(token)).findFirst().orElse(null);
 
         if (order == null) {
             return ResponseEntity.notFound().build();
@@ -118,6 +130,51 @@ public class OrderController {
         orderRepository.save(order);
 
         return ResponseEntity.ok(Map.of("success", true));
+    }
+
+    @PutMapping("/orders/{token}/cancel")
+    @Transactional
+    public ResponseEntity<?> cancelOrder(@PathVariable Integer token, @RequestParam Long ownerId) {
+        List<Order> orders = orderRepository.findByOwnerIdAndStatusNotOrderByIsPriorityDescTokenAsc(ownerId, "completed");
+        Order order = orders.stream().filter(o -> o.getToken().equals(token)).findFirst().orElse(null);
+
+        if (order == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        order.setStatus("cancelled");
+        orderRepository.save(order);
+
+        return ResponseEntity.ok(Map.of("success", true));
+    }
+
+    @PutMapping("/orders/{id}/extend")
+    @Transactional
+    public ResponseEntity<?> extendOrderTime(@PathVariable Long id, @RequestBody Map<String, Integer> payload, Principal principal) {
+        Long ownerId = Long.valueOf(principal.getName());
+        
+        if (!payload.containsKey("extraMinutes")) {
+            return ResponseEntity.badRequest().body(Map.of("error", "extraMinutes is required"));
+        }
+        int extraMinutes = payload.get("extraMinutes");
+
+        Order order = orderRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
+
+        // Security check: ensure the order belongs to the authenticated owner
+        if (!order.getOwnerId().equals(ownerId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "You are not authorized to modify this order."));
+        }
+
+        int newDuration = order.getDuration() + extraMinutes;
+        if (newDuration < 1) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Duration cannot be less than 1 minute."));
+        }
+
+        order.setDuration(newDuration);
+        Order savedOrder = orderRepository.save(order);
+
+        return ResponseEntity.ok(savedOrder);
     }
 
     @GetMapping("/orders/history")
@@ -142,7 +199,7 @@ public class OrderController {
         String customerMobile = (String) payload.get("customerMobile");
 
         if (customerName == null || customerName.trim().isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Customer name is required when creating a token manually."));
+            customerName = "Guest";
         }
 
         if (customerMobile == null) {
@@ -160,11 +217,20 @@ public class OrderController {
         }
 
         Long ownerId = Long.valueOf(payload.get("ownerId").toString());
-        String customerName = (String) payload.getOrDefault("customerName", "Guest");
-        String customerMobile = (String) payload.getOrDefault("customerMobile", "");
+        
+        String customerName = (String) payload.get("customerName");
+        if (customerName == null || customerName.trim().isEmpty()) {
+            customerName = "Guest";
+        }
+        
+        String customerMobile = (String) payload.get("customerMobile");
+        if (customerMobile == null) {
+            customerMobile = "";
+        }
+        
         boolean isPriority = Boolean.TRUE.equals(payload.get("isPriority"));
 
-        return createOrder(ownerId, customerName, customerMobile, isPriority);
+        return createOrder(ownerId, customerName.trim(), customerMobile.trim(), isPriority);
     }
 
     private ResponseEntity<?> createOrder(Long ownerId, String customerName, String customerMobile, boolean isPriority) {
@@ -194,43 +260,81 @@ public class OrderController {
         Owner owner = ownerRepository.findById(ownerId).orElse(null);
         String businessName = (owner != null) ? owner.getBusinessName() : "";
 
+        // Calculate estimated wait time for the new order
+        List<Order> orders = orderRepository.findByOwnerIdAndStatusNotOrderByIsPriorityDescTokenAsc(ownerId, "completed");
+        orders.sort(Comparator
+            .comparing((Order o) -> "serving".equals(o.getStatus()) ? 0 : 1)
+            .thenComparing(Order::isPriority, Comparator.reverseOrder())
+            .thenComparing(Order::getToken));
+
+        int estimatedWaitTime = 0;
+        int cumulativeWaitTime = 0;
+        int position = 0;
+        for (Order o : orders) {
+            int currentWait = "serving".equals(o.getStatus()) ? 0 : cumulativeWaitTime;
+            if (o.getId().equals(savedOrder.getId())) {
+                estimatedWaitTime = currentWait;
+                break;
+            }
+            position++;
+            cumulativeWaitTime += o.getDuration();
+        }
+
         return ResponseEntity.ok(Map.of(
             "success", true,
             "token", nextToken,
             "id", savedOrder.getId(),
-            "position", 0, // You might want to calculate actual position here
+            "position", position,
             "businessName", businessName,
             "customerName", customerName,
-            "customerMobile", customerMobile
+            "customerMobile", customerMobile,
+            "duration", savedOrder.getDuration(),
+            "estimatedWaitTime", estimatedWaitTime
         ));
     }
 
     @GetMapping("/orders/{token}/status")
     public ResponseEntity<?> getCustomerOrderStatus(@PathVariable Integer token, @RequestParam Long ownerId) {
-        Order order = orderRepository.findByTokenAndOwnerId(token, ownerId).orElse(null);
+        // Calculate wait time for this specific order
+        List<Order> orders = orderRepository.findByOwnerIdAndStatusNotOrderByIsPriorityDescTokenAsc(ownerId, "completed");
+        
+        // Apply consistent sorting: Serving -> Priority -> Token
+        orders.sort(Comparator
+            .comparing((Order o) -> "serving".equals(o.getStatus()) ? 0 : 1)
+            .thenComparing(Order::isPriority, Comparator.reverseOrder())
+            .thenComparing(Order::getToken));
+
+        Order order = orders.stream().filter(o -> o.getToken().equals(token)).findFirst().orElse(null);
+        
         if (order == null) {
             return ResponseEntity.notFound().build();
         }
 
-        // Calculate wait time for this specific order
-        List<Order> orders = orderRepository.findByOwnerIdAndStatusNotOrderByIsPriorityDescTokenAsc(ownerId, "completed");
         int waitTime = 0;
+        int cumulativeWaitTime = 0;
+        int position = 0;
         
         for (Order o : orders) {
+            int currentWait = "serving".equals(o.getStatus()) ? 0 : cumulativeWaitTime;
             if (o.getId().equals(order.getId())) {
+                waitTime = currentWait;
                 break;
             }
-            waitTime += o.getDuration();
+            position++;
+            cumulativeWaitTime += o.getDuration();
         }
 
-        // If status is serving, wait time is 0
-        if ("serving".equals(order.getStatus())) {
-            waitTime = 0;
-        }
-
-        @SuppressWarnings("unchecked")
-        Map<String, Object> response = objectMapper.convertValue(order, Map.class);
+        Map<String, Object> response = new HashMap<>();
+        response.put("id", order.getId());
+        response.put("token", order.getToken());
+        response.put("customerName", order.getCustomerName());
+        response.put("customerMobile", order.getCustomerMobile());
+        response.put("isPriority", order.isPriority());
+        response.put("status", order.getStatus());
+        response.put("duration", order.getDuration());
         response.put("estimatedWaitTime", waitTime);
+        response.put("position", position);
+        response.put("ownerId", order.getOwnerId());
         
         return ResponseEntity.ok(response);
     }
