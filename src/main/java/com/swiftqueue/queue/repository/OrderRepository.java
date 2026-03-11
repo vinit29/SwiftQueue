@@ -6,19 +6,24 @@ import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import com.swiftqueue.queue.model.Order;
 
 public interface OrderRepository extends JpaRepository<Order, Long> {
-    // Replicates: SELECT * FROM orders WHERE owner_id = ? AND status != 'completed' ORDER BY isPriority DESC, token ASC
+
     List<Order> findByOwnerIdAndStatusNotOrderByIsPriorityDescTokenAsc(Long ownerId, String status);
 
-    @Query("SELECT MAX(o.token) FROM Order o WHERE o.ownerId = :ownerId")
-    Integer findMaxTokenByOwnerId(Long ownerId);
-
-    Optional<Order> findByTokenAndOwnerId(Integer token, Long ownerId);
     List<Order> findByOwnerIdAndStatusOrderByIdDesc(Long ownerId, String status);
 
-    @Query("SELECT new map(MAX(o.id) as id, COALESCE(o.customerName, 'Guest') as name, COALESCE(o.customerMobile, '') as mobile, COUNT(o) as visitCount, MAX(o.createdAt) as lastVisit) FROM Order o WHERE o.ownerId = :ownerId GROUP BY o.customerName, o.customerMobile")
-    List<Map<String, Object>> findCustomerStatsByOwnerId(Long ownerId);
+    @Query("SELECT new map(o.customerName as name, COUNT(o) as visitCount, MAX(o.createdAt) as lastVisit) FROM Order o WHERE o.ownerId = :ownerId GROUP BY o.customerName")
+    List<Map<String, Object>> findCustomerStatsByOwnerId(@Param("ownerId") Long ownerId);
+
+    @Query("SELECT COALESCE(SUM(o.duration), 0) FROM Order o WHERE o.ownerId = :ownerId AND o.status IN ('waiting', 'serving') AND (o.status = 'serving' OR (o.isPriority = true AND :isPriority = false) OR (o.isPriority = :isPriority AND o.token < :token))")
+    Long getWaitTimeAhead(@Param("ownerId") Long ownerId, @Param("isPriority") boolean isPriority, @Param("token") Integer token);
+
+    @Query("SELECT COUNT(o) FROM Order o WHERE o.ownerId = :ownerId AND o.status IN ('waiting', 'serving') AND (o.status = 'serving' OR (o.isPriority = true AND :isPriority = false) OR (o.isPriority = :isPriority AND o.token < :token))")
+    Long getPositionAhead(@Param("ownerId") Long ownerId, @Param("isPriority") boolean isPriority, @Param("token") Integer token);
+
+    Optional<Order> findByOwnerIdAndToken(Long ownerId, Integer token);
 }
