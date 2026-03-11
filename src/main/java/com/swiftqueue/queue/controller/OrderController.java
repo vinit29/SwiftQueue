@@ -20,12 +20,15 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.swiftqueue.queue.dto.CreateOrderForOwnerRequest;
+import com.swiftqueue.queue.dto.NewOrderRequest;
 import com.swiftqueue.queue.model.Counter;
 import com.swiftqueue.queue.model.Order;
 import com.swiftqueue.queue.model.Owner;
 import com.swiftqueue.queue.repository.CounterRepository;
 import com.swiftqueue.queue.repository.OrderRepository;
 import com.swiftqueue.queue.repository.OwnerRepository;
+import jakarta.validation.Valid;
 
 @RestController
 @RequestMapping("/api")
@@ -193,17 +196,17 @@ public class OrderController {
 
     @PostMapping("/orders/token")
     @Transactional
-    public ResponseEntity<?> createOrderForOwner(@RequestBody Map<String, Object> payload, Principal principal) {
+    public ResponseEntity<?> createOrderForOwner(@RequestBody CreateOrderForOwnerRequest request, Principal principal) {
         Long ownerId = Long.valueOf(principal.getName());
-        String customerName = (String) payload.get("customerName");
-        String customerMobile = (String) payload.get("customerMobile");
+        String customerName = request.customerName();
+        String customerMobile = request.customerMobile();
 
         if (customerName == null || customerName.trim().isEmpty()) {
             customerName = "Guest";
         }
 
-        if (customerMobile == null) {
-            customerMobile = "";
+        if (customerMobile == null || customerMobile.trim().isEmpty()) {
+            customerMobile = ""; // Default to empty string if null or empty
         }
         
         return createOrder(ownerId, customerName.trim(), customerMobile.trim(), false);
@@ -211,26 +214,11 @@ public class OrderController {
 
     @PostMapping("/getNewOrder")
     @Transactional
-    public ResponseEntity<?> registerCustomer(@RequestBody Map<String, Object> payload) {
-        if (!payload.containsKey("ownerId")) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Owner ID is required"));
-        }
+    public ResponseEntity<?> registerCustomer(@Valid @RequestBody NewOrderRequest request) {
+        // Validation is now handled by annotations on the NewOrderRequest DTO.
+        boolean isPriority = Boolean.TRUE.equals(request.isPriority());
 
-        Long ownerId = Long.valueOf(payload.get("ownerId").toString());
-        
-        String customerName = (String) payload.get("customerName");
-        if (customerName == null || customerName.trim().isEmpty()) {
-            customerName = "Guest";
-        }
-        
-        String customerMobile = (String) payload.get("customerMobile");
-        if (customerMobile == null) {
-            customerMobile = "";
-        }
-        
-        boolean isPriority = Boolean.TRUE.equals(payload.get("isPriority"));
-
-        return createOrder(ownerId, customerName.trim(), customerMobile.trim(), isPriority);
+        return createOrder(request.ownerId(), request.customerName().trim(), request.customerMobile().trim(), isPriority);
     }
 
     private ResponseEntity<?> createOrder(Long ownerId, String customerName, String customerMobile, boolean isPriority) {

@@ -1,11 +1,11 @@
 package com.swiftqueue.queue.security;
 
 import java.io.IOException;
-import java.util.Collections;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
@@ -34,11 +34,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String jwt = getJwtFromRequest(request);
 
             if (StringUtils.hasText(jwt) && tokenProvider.validateToken(jwt)) {
-                Long ownerId = tokenProvider.getOwnerIdFromToken(jwt);
-
-                UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                        ownerId.toString(), null, Collections.emptyList());
-                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                Authentication authentication = tokenProvider.getAuthentication(jwt);
+                
+                if (authentication instanceof UsernamePasswordAuthenticationToken auth) {
+                    auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                }
 
                 SecurityContextHolder.getContext().setAuthentication(authentication);
             }

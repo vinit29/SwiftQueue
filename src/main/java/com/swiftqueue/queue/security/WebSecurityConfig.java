@@ -46,7 +46,8 @@ public class WebSecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             // 3. Configure authorization rules for your endpoints
             .authorizeHttpRequests(authz -> authz
-                .requestMatchers("/api/auth/**", "/getNewOrder", "/api/orders/{token}/status", "/api/orders/{token}/cancel").permitAll()
+                .requestMatchers("/api/auth/**", "/api/getNewOrder", "/api/orders/{token}/status", "/api/orders/{token}/cancel").permitAll()
+                .requestMatchers("/api/owner/**").hasRole("OWNER")
                 .anyRequest().authenticated()
             );
 
@@ -59,8 +60,8 @@ public class WebSecurityConfig {
     @Bean
     CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        // Only allow requests from the frontend development server
-        configuration.setAllowedOrigins(Arrays.asList("http://localhost:3000"));
+        // Allow requests from any origin (localhost, local network IPs for mobile testing, etc.)
+        configuration.setAllowedOriginPatterns(Arrays.asList("*"));
         // Allow all common HTTP methods
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         // Allow all headers

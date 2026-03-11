@@ -14,7 +14,6 @@ import org.springframework.web.server.ResponseStatusException;
 import com.swiftqueue.queue.model.Owner;
 import com.swiftqueue.queue.repository.OwnerRepository;
 
-// TODO: You will need to secure these endpoints with Spring Security
 @RestController
 @RequestMapping("/api/owner")
 public class OwnerController {
