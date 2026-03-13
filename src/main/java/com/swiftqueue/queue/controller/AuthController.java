@@ -1,7 +1,6 @@
 package com.swiftqueue.queue.controller;
 
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Map;
 
 import org.springframework.http.HttpStatus;
